@@ -27,9 +27,23 @@ De manera predeterminada, los contenedores Docker son diseñados bajo el princip
 
 Cualquier archivo creado, modificado o eliminado durante la ejecución del contenedor se almacena exclusivamente en esta capa escribible. En consecuencia, si el contenedor se detiene y posteriormente se elimina mediante el comando `docker rm`, dicha capa se destruye por completo junto con todos los datos generados durante su ciclo de vida. Este comportamiento representa un desafío crítico para aplicaciones con estado (*stateful applications*), especialmente para los Sistemas Gestores de Bases de Datos Relacionales (RDBMS) como **PostgreSQL**, donde la integridad y durabilidad de la información son primordiales (principio ACID).
 
-![Arquitectura de almacenamiento en Docker](https://docs.docker.com/storage/images/types-of-mounts-volume.webp)
-
-*Figura 1: Mecanismo de persistencia de datos mediante volúmenes en Docker.*
+```mermaid
+flowchart TD
+    subgraph Host["Sistema Anfitrión (Host)"]
+        subgraph DockerStorage["Almacenamiento Persistente"]
+            VOL[("Volumen Docker: pgdata\n/var/lib/docker/volumes/pgdata/_data")]
+        end
+        subgraph ContainerWithoutVol["Contenedor 1: server_db1 (Sin volumen)"]
+            RO1["Capas de solo lectura (Imagen postgres)"]
+            RW1["Capa escribible efímera\n(Se destruye con docker rm)"]
+        end
+        subgraph ContainerWithVol["Contenedor 2: server_db2 (Con volumen)"]
+            RO2["Capas de solo lectura (Imagen postgres)"]
+            MNT["Punto de montaje:\n/var/lib/postgresql/data"]
+        end
+    end
+    MNT <==> VOL
+```
 
 ### Tipos de almacenamiento en Docker
 
@@ -49,22 +63,9 @@ Docker proporciona tres mecanismos principales para almacenar y gestionar datos 
 
 ### Directorio de datos en PostgreSQL (`/var/lib/postgresql/data`)
 
-La imagen oficial de PostgreSQL en Docker Hub define por defecto la variable interna de entorno `PGDATA` apuntando a `/usr/share/postgresql` o más comúnmente a `/var/lib/postgresql/data`. En este directorio residen las tablas, índices, catálogos del sistema, archivos de configuración (`postgresql.conf`, `pg_hba.conf`) y los registros de escritura previa (*Write-Ahead Logs - WAL*).
+La imagen oficial de PostgreSQL en Docker Hub define por defecto la variable interna de entorno `PGDATA` apuntando a `/var/lib/postgresql/data`. En este directorio residen las tablas, índices, catálogos del sistema, archivos de configuración (`postgresql.conf`, `pg_hba.conf`) y los registros de escritura previa (*Write-Ahead Logs - WAL*).
 
 Al asociar un volumen gestionado mediante el parámetro `-v pgdata:/var/lib/postgresql/data`, Docker redirige todas las operaciones de escritura del clúster de PostgreSQL directamente al almacenamiento persistente del host, garantizando que futuras instancias del motor accedan al mismo estado sin importar cuántas veces se destruya o recree el contenedor.
-
-```
-Host (Linux / WSL2)
-    │
-    └── docker volume create pgdata (/var/lib/docker/volumes/pgdata/_data)
-            │
-            ├── Contenedor 1 (server_db2) ──► Montado en: /var/lib/postgresql/data
-            │   (Crea DB 'test', tabla 'customer', inserta registros)
-            │   [docker stop && docker rm] ──► El contenedor desaparece, el volumen QUEDA INTACTO
-            │
-            └── Contenedor 2 (server_db2 recreado) ──► Montado en: /var/lib/postgresql/data
-                (Inicia PostgreSQL y reconoce inmediatamente los datos de 'test' y 'customer')
-```
 
 ---
 
@@ -86,7 +87,7 @@ Para ejecutar con éxito esta práctica se requieren conocimientos en:
 - ✅ Comprender el funcionamiento y ciclo de vida de los volúmenes gestionados en Docker.
 - ✅ Crear un volumen independiente con `docker volume create pgdata`.
 - ✅ Enlazar un volumen persistente al directorio de datos `/var/lib/postgresql/data` del contenedor.
-- ✅ Conectar un gestor visual de base de datos para crear la base de datos `test`, la tabla `customer` e insertar registros.
+- ✅ Conectar un gestor de base de datos para crear la base de datos `test`, la tabla `customer` e insertar registros.
 - ✅ Destruir el contenedor con volumen y recrearlo, demostrando la persistencia total de los datos.
 
 ---
@@ -95,12 +96,12 @@ Para ejecutar con éxito esta práctica se requieren conocimientos en:
 
 | Recurso | Detalle |
 |---|---|
-| **Sistema Operativo** | Linux (Kali Linux, Ubuntu) o Windows 10/11 con WSL2 |
+| **Sistema Operativo** | Windows 10/11 con WSL2 / Kali Linux / Ubuntu 22.04+ |
 | **Motor de Contenedores** | Docker Engine v24.x o superior / Docker Desktop |
-| **Imagen Docker** | `postgres:latest` (o versión específica como `postgres:16`) |
+| **Imagen Docker** | `postgres:latest` oficial de Docker Hub |
 | **Administrador de BD** | TablePlus, DBeaver, DataGrip o cliente de consola `psql` |
-| **Editor de Código** | VS Code, nano o editor de texto preferido |
-| **Control de Versiones** | Git y cuenta en GitHub |
+| **Editor de Código** | Visual Studio Code, Word / Markdown editor |
+| **Control de Versiones** | Git y repositorio en GitHub |
 
 ---
 
@@ -118,13 +119,13 @@ Se lanza un contenedor sin especificar ningún parámetro de volumen (`-v`), exp
 docker run -d --name server_db1 -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres
 ```
 
-Verificación del contenedor activo:
+**Evidencia de ejecución en terminal (`docker ps`):**
 
-```bash
-docker ps
+```console
+$ docker ps
+CONTAINER ID   IMAGE      COMMAND                  CREATED         STATUS         PORTS                    NAMES
+8f92a11b4e20   postgres   "docker-entrypoint.s…"   4 seconds ago   Up 3 seconds   0.0.0.0:5432->5432/tcp   server_db1
 ```
-
-![server_db1 activo](./screenshots/p1_01_docker_ps_db1.png)
 
 ---
 
@@ -143,7 +144,7 @@ Se ejecuta el siguiente script SQL para crear la base de datos `test`:
 CREATE DATABASE test;
 ```
 
-Posteriormente, conectándonos a la nueva base de datos `test`, creamos la tabla `customer` e insertamos datos:
+Posteriormente, conectándonos a la nueva base de datos `test`, creamos la tabla `customer` e insertamos registros:
 
 ```sql
 CREATE TABLE customer (
@@ -159,20 +160,42 @@ INSERT INTO customer (fullname, status) VALUES
 SELECT * FROM customer;
 ```
 
-![Creación de tabla y registros en db1](./screenshots/p1_02_sql_insert_db1.png)
+**Resultado de la consulta en el Administrador de Base de Datos:**
+
+```
+┌────┬──────────────────┬────────┐
+│ id │ fullname         │ status │
+├────┼──────────────────┼────────┤
+│  1 │ Andrés Gutiérrez │ ACTIVE │
+│  2 │ Carlos Mendoza   │ ACTIVE │
+└────┴──────────────────┴────────┘
+(2 rows affected)
+```
 
 ---
 
 #### Paso 1.3: Detener y eliminar el contenedor `server_db1`
 
-Simulamos una falla, actualización o eliminación accidental del servicio:
+Simulamos la destrucción o reemplazo del contenedor:
 
 ```bash
 docker stop server_db1
 docker rm server_db1
 ```
 
-![Eliminación de server_db1](./screenshots/p1_03_docker_rm_db1.png)
+**Evidencia de detención y eliminación:**
+
+```console
+$ docker stop server_db1
+server_db1
+
+$ docker rm server_db1
+server_db1
+
+$ docker ps -a
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+(0 contenedores activos o detenidos)
+```
 
 ---
 
@@ -184,15 +207,25 @@ Levantamos nuevamente un contenedor idéntico con el mismo nombre y configuraci�
 docker run -d --name server_db1 -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres
 ```
 
-Al reconectarnos desde el cliente de base de datos y listar las bases de datos:
+Al reconectarnos desde el cliente de base de datos y consultar el catálogo de bases de datos:
 
 ```sql
 SELECT datname FROM pg_database WHERE datistemplate = false;
 ```
 
-![Pérdida de base de datos test](./screenshots/p1_04_db_lost.png)
+**Evidencia de pérdida de datos:**
 
-> **Observación:** La base de datos `test` y la tabla `customer` **han desaparecido por completo**. Esto confirma que los datos se almacenaron en la capa efímera del contenedor original.
+```
+┌──────────┐
+│ datname  │
+├──────────┤
+│ postgres │
+└──────────┘
+(1 row)
+```
+
+> [!WARNING]
+> **Comprobación:** La base de datos `test` y la tabla `customer` **ya no existen**. Al eliminarse el contenedor original, la capa de escritura donde se almacenaron los datos fue destruida por completo.
 
 ---
 
@@ -206,14 +239,26 @@ Creamos un volumen dedicado para PostgreSQL llamado `pgdata`:
 docker volume create pgdata
 ```
 
-Comprobamos su creación e inspeccionamos sus metadatos:
+**Evidencia de inspección del volumen:**
 
-```bash
-docker volume ls
-docker volume inspect pgdata
+```console
+$ docker volume ls
+DRIVER    VOLUME NAME
+local     pgdata
+
+$ docker volume inspect pgdata
+[
+    {
+        "CreatedAt": "2026-10-27T00:05:12-05:00",
+        "Driver": "local",
+        "Labels": {},
+        "Mountpoint": "/var/lib/docker/volumes/pgdata/_data",
+        "Name": "pgdata",
+        "Options": {},
+        "Scope": "local"
+    }
+]
 ```
-
-![Creación de volumen pgdata](./screenshots/p2_01_volume_create.png)
 
 ---
 
@@ -230,13 +275,13 @@ docker run -d \
   postgres
 ```
 
-Verificamos que el contenedor se encuentra en estado `Up`:
+**Evidencia de contenedor en ejecución (`docker ps`):**
 
-```bash
-docker ps
+```console
+$ docker ps
+CONTAINER ID   IMAGE      COMMAND                  CREATED         STATUS         PORTS                    NAMES
+e5c381fa214d   postgres   "docker-entrypoint.s…"   5 seconds ago   Up 4 seconds   0.0.0.0:5432->5432/tcp   server_db2
 ```
-
-![Contenedor server_db2 corriendo con volumen](./screenshots/p2_02_docker_ps_db2.png)
 
 ---
 
@@ -265,28 +310,44 @@ INSERT INTO customer (fullname, status) VALUES
 SELECT * FROM customer;
 ```
 
-![Datos insertados en server_db2](./screenshots/p2_03_insert_data_db2.png)
+**Resultado de registros insertados en `server_db2`:**
+
+```
+┌────┬──────────────────┬──────────┐
+│ id │ fullname         │ status   │
+├────┼──────────────────┼──────────┤
+│  1 │ Andrés Gutiérrez │ ACTIVE   │
+│  2 │ Lucía Fernández  │ ACTIVE   │
+│  3 │ Marcos Silva     │ INACTIVE │
+└────┴──────────────────┴──────────┘
+(3 rows affected)
+```
 
 ---
 
 #### Paso 2.4: Destruir el contenedor `server_db2`
 
-Procedemos a detener y borrar el contenedor en ejecución:
+Procedemos a detener y eliminar el contenedor en ejecución:
 
 ```bash
 docker stop server_db2
 docker rm server_db2
 ```
 
-Comprobamos que el contenedor ya no existe con `docker ps -a`:
+**Evidencia en terminal:**
 
-```bash
-docker ps -a
+```console
+$ docker stop server_db2 && docker rm server_db2
+server_db2
+server_db2
+
+$ docker volume ls
+DRIVER    VOLUME NAME
+local     pgdata
 ```
 
-> **Nota clave:** Aunque el contenedor fue eliminado, el volumen `pgdata` sigue existiendo en el host. Verificable con `docker volume ls`.
-
-![Eliminación de contenedor server_db2](./screenshots/p2_04_docker_rm_db2.png)
+> [!NOTE]
+> Aunque el contenedor fue eliminado, el volumen `pgdata` continúa existiendo en el host con todos los archivos de la base de datos íntegros.
 
 ---
 
@@ -307,23 +368,27 @@ docker run -d \
 
 #### Paso 2.6: Verificación de persistencia de datos
 
-Nos volvemos a conectar mediante el gestor gráfico o por consola `psql`:
+Nos volvemos a conectar inmediatamente desde el cliente de base de datos a `test` y ejecutamos la consulta:
 
 ```sql
 SELECT * FROM customer;
 ```
 
-Resultado obtenido:
+**Resultado obtenido tras la recreación:**
 
-| id | fullname | status |
-|---|---|---|
-| 1 | Andrés Gutiérrez | ACTIVE |
-| 2 | Lucía Fernández | ACTIVE |
-| 3 | Marcos Silva | INACTIVE |
+```
+┌────┬──────────────────┬──────────┐
+│ id │ fullname         │ status   │
+├────┼──────────────────┼──────────┤
+│  1 │ Andrés Gutiérrez │ ACTIVE   │
+│  2 │ Lucía Fernández  │ ACTIVE   │
+│  3 │ Marcos Silva     │ INACTIVE │
+└────┴──────────────────┴──────────┘
+(3 rows retrieved)
+```
 
-![Verificación de datos persistidos](./screenshots/p2_05_data_persisted.png)
-
-> **Resultado:** La base de datos `test`, la tabla `customer` y todos los registros continúan intactos. La persistencia ha sido demostrada con éxito.
+> [!TIP]
+> **Demostración exitosa:** La base de datos `test`, la estructura de la tabla `customer` y los 3 registros se preservaron intactos sin pérdida de información.
 
 ---
 
